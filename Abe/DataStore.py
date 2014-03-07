@@ -74,6 +74,8 @@ CHAIN_CONFIG = [
      "code3":"SC0", "address_version":"\x6f", "magic":"\xca\xfe\xba\xbe"},
     {"chain":"Worldcoin",
      "code3":"WDC", "address_version":"\x49", "magic":"\xfb\xc0\xb6\xdb"},
+    {"chain":"Cagecoin",
+     "code3":"CAG", "address_version":"\x1F", "magic":"\xC0\xC0\xC0\xC0"},
     {"chain":"NovaCoin"},
     {"chain":"CryptoCash"},
     #{"chain":"",
@@ -3018,6 +3020,7 @@ store._ddl['txout_approx'],
 
             # Assume blocks obey the respective policy if they get here.
             chain_id = dircfg['chain_id']
+            #print chain_id
             chain = store.chains_by.id.get(chain_id, None)
 
             if chain is None:
