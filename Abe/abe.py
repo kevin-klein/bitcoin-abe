@@ -1857,6 +1857,234 @@ class Abe:
             return 'X5'
         return 'SZ'
 
+    def q_tx(abe, page, chain):
+        tx_hash = wsgiref.util.shift_path_info(page['env'])
+        if tx_hash in (None, '') or page['env']['PATH_INFO'] != '':
+            raise PageNotFound()
+
+        tx_hash = tx_hash.lower()  # Case-insensitive, BBE compatible
+        # page['title'] = ['Transaction ', tx_hash[:10], '...', tx_hash[-4:]]
+        # body = page['body']
+
+        if not is_hash_prefix(tx_hash):
+            # body += ['<p class="error">Not a valid transaction hash.</p>']
+            return ''
+
+        row = abe.store.selectrow("""
+            SELECT tx_id, tx_version, tx_lockTime, tx_size
+              FROM tx
+             WHERE tx_hash = ?
+        """, (abe.store.hashin_hex(tx_hash),))
+        if row is None:
+            # body += ['<p class="error">Transaction not found.</p>']
+            return ''
+        tx_id, tx_version, tx_lockTime, tx_size = (
+            int(row[0]), int(row[1]), int(row[2]), int(row[3]))
+
+        block_rows = abe.store.selectall("""
+            SELECT c.chain_name, cc.in_longest,
+                   b.block_nTime, b.block_height, b.block_hash,
+                   block_tx.tx_pos
+              FROM chain c
+              JOIN chain_candidate cc ON (cc.chain_id = c.chain_id)
+              JOIN block b ON (b.block_id = cc.block_id)
+              JOIN block_tx ON (block_tx.block_id = b.block_id)
+             WHERE block_tx.tx_id = ?
+             ORDER BY c.chain_id, cc.in_longest DESC, b.block_hash
+        """, (tx_id,))
+
+        def parse_row(row):
+            pos, script, value, o_hash, o_pos, binaddr = row
+            return {
+                "pos": int(pos),
+                "script": abe.store.binout(script),
+                "value": None if value is None else int(value),
+                "o_hash": abe.store.hashout_hex(o_hash),
+                "o_pos": None if o_pos is None else int(o_pos),
+                "binaddr": abe.store.binout(binaddr),
+                }
+
+        # def row_to_html(row, this_ch, other_ch, no_link_text):
+        #     body = page['body']
+        #     body += [
+        #         '<tr>\n',
+        #         '<td><a name="', this_ch, row['pos'], '">', row['pos'],
+        #         '</a></td>\n<td>']
+        #     if row['o_hash'] is None:
+        #         body += [no_link_text]
+        #     else:
+        #         body += [
+        #             '<a href="', row['o_hash'], '#', other_ch, row['o_pos'],
+        #             '">', row['o_hash'][:10], '...:', row['o_pos'], '</a>']
+        #     body += [
+        #         '</td>\n',
+        #         '<td>', format_satoshis(row['value'], chain), '</td>\n',
+        #         '<td>']
+        #     if row['binaddr'] is None:
+        #         body += ['Unknown']
+        #     else:
+        #         body += hash_to_address_link(chain.address_version,
+        #                                      row['binaddr'], '../')
+        #     body += ['</td>\n']
+        #     if row['script'] is not None:
+        #         body += ['<td>', escape(decode_script(row['script'])),
+        #         '</td>\n']
+        #     body += ['</tr>\n']
+
+        # XXX Unneeded outer join.
+        in_rows = map(parse_row, abe.store.selectall("""
+            SELECT
+                txin.txin_pos""" + (""",
+                txin.txin_scriptSig""" if abe.store.keep_scriptsig else """,
+                NULL""") + """,
+                txout.txout_value,
+                COALESCE(prevtx.tx_hash, u.txout_tx_hash),
+                COALESCE(txout.txout_pos, u.txout_pos),
+                pubkey.pubkey_hash
+              FROM txin
+              LEFT JOIN txout ON (txout.txout_id = txin.txout_id)
+              LEFT JOIN pubkey ON (pubkey.pubkey_id = txout.pubkey_id)
+              LEFT JOIN tx prevtx ON (txout.tx_id = prevtx.tx_id)
+              LEFT JOIN unlinked_txin u ON (u.txin_id = txin.txin_id)
+             WHERE txin.tx_id = ?
+             ORDER BY txin.txin_pos
+        """, (tx_id,)))
+
+        # XXX Only two outer JOINs needed.
+        out_rows = map(parse_row, abe.store.selectall("""
+            SELECT
+                txout.txout_pos,
+                txout.txout_scriptPubKey,
+                txout.txout_value,
+                nexttx.tx_hash,
+                txin.txin_pos,
+                pubkey.pubkey_hash
+              FROM txout
+              LEFT JOIN txin ON (txin.txout_id = txout.txout_id)
+              LEFT JOIN pubkey ON (pubkey.pubkey_id = txout.pubkey_id)
+              LEFT JOIN tx nexttx ON (txin.tx_id = nexttx.tx_id)
+             WHERE txout.tx_id = ?
+             ORDER BY txout.txout_pos
+        """, (tx_id,)))
+
+        def sum_values(rows):
+            ret = 0
+            for row in rows:
+                if row['value'] is None:
+                    return None
+                ret += row['value']
+            return ret
+
+        value_in = sum_values(in_rows)
+        value_out = sum_values(out_rows)
+        is_coinbase = None
+
+        result = {}
+
+        #body += abe.short_link(page, 't/' + hexb58(tx_hash[:14]))
+        #body += ['<p>Hash: ', tx_hash, '<br />\n']
+        result['hash'] = tx_hash
+        chain = None
+        for row in block_rows:
+            (name, in_longest, nTime, height, blk_hash, tx_pos) = (
+                row[0], int(row[1]), int(row[2]),
+                None if row[3] is None else int(row[3]),
+                abe.store.hashout_hex(row[4]), int(row[5]))
+            if chain is None:
+                chain = abe.chain_lookup_by_name(name)
+                is_coinbase = (tx_pos == 0)
+            elif name != chain.name:
+                abe.log.warning('Transaction ' + tx_hash + ' in multiple chains: '
+                             + name + ', ' + chain.name)
+            # body += [
+            #     'Appeared in <a href="../block/', blk_hash, '">',
+            #     escape(name), ' ',
+            #     height if in_longest else [blk_hash[:10], '...', blk_hash[-4:]],
+            #     '</a> (', format_time(nTime), ')<br />\n']
+            result['appeared_in'] = {
+                'coin': height if in_longest else [blk_hash[:10], '...', blk_hash[-4:]],
+                'hash': blk_hash
+            }
+
+        if chain is None:
+            abe.log.warning('Assuming default chain for Transaction ' + tx_hash)
+            chain = abe.get_default_chain()
+
+        result['number_of_inputs'] = len(in_rows)
+        result['number_of_outputs'] = len(out_rows)
+        result['total_in'] = format_satoshis(value_in, chain)
+        result['total_out'] = format_satoshis(value_out, chain)
+        result['size'] = tx_size
+        result['fee'] = format_satoshis(0 if is_coinbase else
+                                     (value_in and value_out and
+                                      value_in - value_out), chain)
+
+        result['inputs'] = []
+        
+        for row in in_rows:
+            if row['o_hash'] is None:
+                addr = 'Generation' if is_coinbase else 'Unknown'
+            else:
+                addr = util.hash_to_address(row['binaddr'], chain.address_version)
+
+            result['inputs'].append({
+                'index': row['pos'],
+                'previous_output': row['o_hash'],
+                'amount': format_satoshis(row['value'], chain),
+                'from_address': addr,
+                'script_sig': escape(decode_script(row['script']))
+            })
+
+        result['outputs'] = []
+
+        for row in out_rows:
+            if row['o_hash'] is None:
+                redeemed = 'Not yet redeemed'
+            else:
+                redeemed = row['o_hash']
+
+            result['outputs'].append({
+                'index': row['pos'],
+                'redeemed': redeemed,
+                'amount': format_satoshis(row['value'], chain),
+                'to_address': util.hash_to_address(row['binaddr'], chain.address_version),
+                'script_pub_key': escape(decode_script(row['script']))
+            })
+
+        # body += [
+        #     'Number of inputs: ', len(in_rows),
+        #     ' (<a href="#inputs">Jump to inputs</a>)<br />\n',
+        #     'Total in: ', format_satoshis(value_in, chain), '<br />\n',
+        #     'Number of outputs: ', len(out_rows),
+        #     ' (<a href="#outputs">Jump to outputs</a>)<br />\n',
+        #     'Total out: ', format_satoshis(value_out, chain), '<br />\n',
+        #     'Size: ', tx_size, ' bytes<br />\n',
+        #     'Fee: ', format_satoshis(0 if is_coinbase else
+        #                              (value_in and value_out and
+        #                               value_in - value_out), chain),
+        #     '<br />\n',
+        #     '<a href="../rawtx/', tx_hash, '">Raw transaction</a><br />\n']
+        # body += ['</p>\n',
+        #          '<a name="inputs"><h3>Inputs</h3></a>\n<table>\n',
+        #          '<tr><th>Index</th><th>Previous output</th><th>Amount</th>',
+        #          '<th>From address</th>']
+        # if abe.store.keep_scriptsig:
+        #     body += ['<th>ScriptSig</th>']
+        # body += ['</tr>\n']
+        # for row in in_rows:
+        #     row_to_html(row, 'i', 'o',
+        #                 'Generation' if is_coinbase else 'Unknown')
+        # body += ['</table>\n',
+        #          '<a name="outputs"><h3>Outputs</h3></a>\n<table>\n',
+        #          '<tr><th>Index</th><th>Redeemed at input</th><th>Amount</th>',
+        #          '<th>To address</th><th>ScriptPubKey</th></tr>\n']
+        # for row in out_rows:
+        #     row_to_html(row, 'o', 'i', 'Not yet redeemed')
+
+        # body += ['</table>\n']
+        page['content_type'] = 'application/json'
+        return json.dumps(result)
+
     def q_block(abe, page, chain):
         block_hash = wsgiref.util.shift_path_info(page['env'])
         if block_hash in (None, '') or page['env']['PATH_INFO'] != '':
@@ -1881,6 +2109,7 @@ class Abe:
             (dbhash,))
         if row is None:
             where = 'block_hash = ?'
+            bind = (dbhash,)
         else:
             chain_id, block_id, height = row
             chain = abe.store.get_chain_by_id(chain_id)
@@ -2064,7 +2293,7 @@ class Abe:
         result['difficulty'] = format_difficulty(util.calculate_difficulty(nBits))
         result['cummulative_difficulty'] = format_difficulty(util.work_to_difficulty(block_chain_work))
         result['nonce'] = nNonce
-        result['transactions'] = num_tx
+        result['transaction_number'] = num_tx
         result['value_out'] = format_satoshis(value_out, chain)
         result['transactions_fee'] = format_satoshis(block_fees, chain)
         result['average_coin_age'] = '%6g' % (ss / 86400.0 / satoshis,)
@@ -2072,6 +2301,48 @@ class Abe:
         result['cummulative_destroyed'] = format_satoshis(destroyed / 86400.0, chain)
         result['cummulative_days_destroyed'] = (100 * (1 - float(ss) / total_ss))
         result['days_destroyed'] = format_satoshis(destroyed / 86400.0, chain)
+        result['transactions'] = []
+
+        for tx_id in tx_ids:
+            origin_amount = 0
+            origin = ''
+            tx = txs[tx_id]
+            if tx is coinbase_tx:
+                origin = 'Generation: ' + str(format_satoshis(generated, chain)) + ' + ' + str(format_satoshis(block_fees, chain))
+            else:
+                for txin in tx['in']:
+                    origin = util.hash_to_address(address_version, txin['pubkey_hash'])
+                    origin_amount = format_satoshis(txin['value'], chain)
+
+            recipient = ''
+            recipient_amount = 0
+            for txout in tx['out']:
+                if is_proof_of_stake:
+                    if tx is coinbase_tx:
+                        assert txout['value'] == 0
+                        assert len(tx['out']) == 1
+                        # body += [
+                        #     format_satoshis(posgen, chain),
+                        #     ' included in the following transaction']
+                        continue
+                    if txout['value'] == 0:
+                        continue
+
+                # body += hash_to_address_link(
+                #     address_version, txout['pubkey_hash'], page['dotdot'])
+                # body += [': ', format_satoshis(txout['value'], chain), '<br />']
+                recipient = util.hash_to_address(address_version, txout['pubkey_hash'])
+                recipient_amount = format_satoshis(txout['value'], chain)
+
+            result['transactions'].append({
+                'transaction': tx['hash'],
+                'fee': format_satoshis(tx['fees'], chain),
+                'size': tx['size'] / 1000.0,
+                'from': origin,
+                'from_amount': origin_amount,
+                'to': recipient,
+                'to_amount': recipient_amount
+            })
 
         # body += [
         #     ['<tr><td>Height: </td><td>', height, '</td></tr>\n']
@@ -2152,6 +2423,7 @@ class Abe:
         #     body += ['</td></tr>\n']
         # body += '</table>\n'
 
+        page['content_type'] = 'application/json'
         return json.dumps(result)
 
     def q_nethash(abe, page, chain):
