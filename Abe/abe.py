@@ -2942,7 +2942,7 @@ def main(argv):
         "address_history_rows_max": None,
         "shortlink_type":           None,
 
-        "template":     open(os.path.abspath('Abe/htdocs/templates/index.html')).read(),
+        "template":     DEFAULT_TEMPLATE,
         "template_vars": {
             "ABE_URL": ABE_URL,
             "APPNAME": ABE_APPNAME,
