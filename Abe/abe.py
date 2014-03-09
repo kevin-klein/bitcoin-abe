@@ -27,8 +27,6 @@ import calendar
 import math
 import logging
 import json
-import decimal
-
 import version
 import DataStore
 import readconf
@@ -38,14 +36,16 @@ import deserialize
 import util  # Added functions.
 import base58
 
+from decimal import Decimal
+
 class DecimalEncoder(json.JSONEncoder):
-    def _iterencode(self, o, markers=None):
-        if isinstance(o, decimal.Decimal):
-            # wanted a simple yield str(o) in the next line,
-            # but that would mean a yield on the line with super(...),
-            # which wouldn't work (see my comment below), so...
-            return (str(o) for o in [o])
-        return super(DecimalEncoder, self)._iterencode(o, markers)
+    """JSON encoder which understands decimals."""
+
+    def default(self, obj):
+        '''Convert object to JSON encodable type.'''
+        if isinstance(obj, Decimal):
+            return "%d" % obj
+        return json.JSONEncoder.default(self, obj)
 
 __version__ = version.__version__
 
