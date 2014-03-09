@@ -997,7 +997,7 @@ class Abe:
         tx = abe.store.export_tx(tx_hash=tx_hash.lower())
         if tx is None:
             return 'ERROR: Transaction does not exist.'  # BBE compatible
-        return json.dumps(tx, sort_keys=True, indent=2, cls=DecimalEncoder, use_decimal=True)
+        return json.dumps(tx, sort_keys=True, indent=2, cls=DecimalEncoder)
 
     def handle_address(abe, page):
         address = wsgiref.util.shift_path_info(page['env'])
@@ -1533,7 +1533,7 @@ class Abe:
                     'value_hex': None if value is None else "%x" % value,
                     'block_number': height})
 
-        return json.dumps({ 'unspent_outputs': out }, sort_keys=True, indent=2, cls=DecimalEncoder, use_decimal=True)
+        return json.dumps({ 'unspent_outputs': out }, sort_keys=True, indent=2, cls=DecimalEncoder)
 
     def do_raw(abe, page, func):
         page['content_type'] = 'text/plain'
@@ -1770,7 +1770,7 @@ class Abe:
             ])
 
         print result
-        return json.dumps(result, cls=DecimalEncoder, use_decimal=True)
+        return json.dumps(result, cls=DecimalEncoder)
 
 
     def q_decode_address(abe, page, chain):
@@ -2094,7 +2094,7 @@ class Abe:
 
         # body += ['</table>\n']
         page['content_type'] = 'application/json'
-        return json.dumps(result, cls=DecimalEncoder, use_decimal=True)
+        return json.dumps(result, cls=DecimalEncoder)
 
     def q_block(abe, page, chain):
         block_hash = wsgiref.util.shift_path_info(page['env'])
@@ -2435,7 +2435,7 @@ class Abe:
         # body += '</table>\n'
 
         page['content_type'] = 'application/json'
-        return json.dumps(result, cls=DecimalEncoder, use_decimal=True)
+        return json.dumps(result, cls=DecimalEncoder)
 
     def q_nethash(abe, page, chain):
         """shows statistics about difficulty and network power."""
