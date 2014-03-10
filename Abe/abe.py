@@ -1868,6 +1868,106 @@ class Abe:
             return 'X5'
         return 'SZ'
 
+    def handle_allchains(abe, page):
+        abe.do_raw(page, abe.raw_handle_allchains)
+
+    def raw_handle_allchains(abe, page, _):
+        # body += [
+        #     '<div class="row"><div class="col-md-12">',
+        #     abe.search_form(page),
+        #     '</div>'
+        #     '<div class="col-md-12">'
+        #     '<table class="table table-bordered">\n',
+        #     '<tr><th>Currency</th><th>Code</th><th>Block</th><th>Time</th>',
+        #     '<th>Started</th><th>Age (days)</th><th>Coins Created</th>',
+        #     '<th>Avg Coin Age</th><th>',
+        #     '% <a href="https://en.bitcoin.it/wiki/Bitcoin_Days_Destroyed">',
+        #     'CoinDD</a></th>',
+        #     '</tr>\n'
+        #     '</div>']
+        now = time.time() - EPOCH1970
+        result = []
+
+        rows = abe.store.selectall("""
+            SELECT c.chain_name, b.block_height, b.block_nTime, b.block_hash,
+                   b.block_total_seconds, b.block_total_satoshis,
+                   b.block_satoshi_seconds,
+                   b.block_total_ss
+              FROM chain c
+              JOIN block b ON (c.chain_last_block_id = b.block_id)
+             ORDER BY c.chain_name
+        """)
+        for row in rows:
+            name = row[0]
+            chain = abe.store.get_chain_by_name(name)
+            if chain is None:
+                abe.log.warning("Store does not know chain: %s", name)
+                continue
+
+            item = {
+                'name': escape(name),
+                'code': escape(chain.code3)
+            }
+
+            # body += [
+            #     '<tr><td><a href="chain/', escape(name), '">',
+            #     escape(name), '</a></td><td>', escape(chain.code3), '</td>']
+
+            if row[1] is not None:
+                (height, nTime, hash) = (
+                    int(row[1]), int(row[2]), abe.store.hashout_hex(row[3]))
+
+                # body += [
+                #     '<td><a href="block/', hash, '">', height, '</a></td>',
+                #     '<td>', format_time(nTime), '</td>']
+                item['block'] = hash
+                item['time'] = format_time(nTime)
+
+                if row[6] is not None and row[7] is not None:
+                    (seconds, satoshis, ss, total_ss) = (
+                        int(row[4]), int(row[5]), int(row[6]), int(row[7]))
+
+                    started = nTime - seconds
+                    chain_age = now - started
+                    since_block = now - nTime
+
+                    if satoshis == 0:
+                        avg_age = '&nbsp;'
+                    else:
+                        avg_age = '%5g' % ((float(ss) / satoshis + since_block)
+                                           / 86400.0)
+
+                    if chain_age <= 0:
+                        percent_destroyed = '&nbsp;'
+                    else:
+                        more = since_block * satoshis
+                        denominator = total_ss + more
+                        if denominator <= 0:
+                            percent_destroyed = '&nbsp;'
+                        else:
+                            percent_destroyed = '%5g%%' % (
+                                100.0 - (100.0 * (ss + more) / denominator))
+
+                    # body += [
+                    #     '<td>', format_time(started)[:10], '</td>',
+                    #     '<td>', '%5g' % (chain_age / 86400.0), '</td>',
+                    #     '<td>', format_satoshis(satoshis, chain), '</td>',
+                    #     '<td>', avg_age, '</td>',
+                    #     '<td>', percent_destroyed, '</td>']
+                    item['started'] = format_time(started)
+                    item['age'] = '%5g' % (chain_age / 86400.0)
+                    item['created'] = format_satoshis(satoshis, chain)
+                    item['average_coin_age'] = avg_age
+                    item['precent_destroyed'] = percent_destroyed
+                    result.append(item)
+
+            # body += ['</tr>\n']
+        # body += ['</table></div>\n']
+        # if len(rows) == 0:
+        #     body += ['<p>No block data found.</p>\n']
+        page['content_type'] = 'application/json'
+        return json.dumps(result, cls=DecimalEncoder)
+
     def q_tx(abe, page, chain):
         tx_hash = wsgiref.util.shift_path_info(page['env'])
         if tx_hash in (None, '') or page['env']['PATH_INFO'] != '':
